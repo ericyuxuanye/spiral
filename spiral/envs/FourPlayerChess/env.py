@@ -26,52 +26,12 @@ except ImportError:
     JAX_AVAILABLE = False
 
 
-# Algebraic notation mapping for the 14x14 cross-shaped board
-# Columns: a-n (14 columns)
-# Rows: 1-14 (14 rows, 1 at bottom, 14 at top)
-COLS = 'abcdefghijklmn'
-ROWS = '123456789' + 'abcde'  # 1-9, then a-e for rows 10-14
-
-
-def coords_to_algebraic(row: int, col: int) -> str:
-    """Convert (row, col) coordinates to algebraic notation like 'a1', 'h8'."""
-    # Row 0 in array = row 14 in algebraic (top)
-    # Row 13 in array = row 1 in algebraic (bottom)
-    algebraic_row = 14 - row
-    if algebraic_row <= 9:
-        row_str = str(algebraic_row)
-    else:
-        # 10='a', 11='b', 12='c', 13='d', 14='e'
-        row_str = chr(ord('a') + algebraic_row - 10)
-
-    return COLS[col] + row_str
-
-
-def algebraic_to_coords(algebraic: str) -> Tuple[int, int]:
-    """Convert algebraic notation like 'a1', 'h8' to (row, col) coordinates."""
-    col_char = algebraic[0].lower()
-    row_part = algebraic[1:]
-
-    col = COLS.index(col_char)
-
-    # Parse row number
-    if row_part.isdigit():
-        algebraic_row = int(row_part)
-    else:
-        # a=10, b=11, c=12, d=13, e=14
-        algebraic_row = ord(row_part.lower()) - ord('a') + 10
-
-    # Convert to array coordinates (row 0 = algebraic row 14)
-    row = 14 - algebraic_row
-
-    return row, col
-
-
 class FourPlayerChessEnv(ta.Env):
     """
     TextArena wrapper for 4-player chess JAX environment.
-    Uses human-readable move notation: (start, end) where start and end are algebraic squares.
-    Example: (e2, e4) to move from e2 to e4
+    Uses numeric coordinate notation: ((start_row, start_col), (end_row, end_col))
+    Coordinates match the board display: rows 0-13, cols 0-13
+    Example: ((12, 3), (10, 3)) to move from row 12, col 3 to row 10, col 3
     """
 
     def __init__(self):
@@ -83,8 +43,11 @@ class FourPlayerChessEnv(ta.Env):
             )
 
         self.jax_env = JAXChessEnv()
-        # Match tuples like (a1, b3) or (e2, e4)
-        self.action_pattern = re.compile(r'\[?\(?([a-n][1-9a-e]),\s*([a-n][1-9a-e])\)?\]?', re.IGNORECASE)
+        # Match coordinate tuples like ((12, 3), (10, 3)) or (12,3,10,3)
+        # Pattern matches: ((r1, c1), (r2, c2)) or (r1, c1, r2, c2) or [r1, c1, r2, c2]
+        self.action_pattern = re.compile(
+            r'\[?\(??\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\s*,?\s*\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\]?'
+        )
         self.player_names = ["Red", "Blue", "Yellow", "Green"]
         self.player_colors = {0: "Red", 1: "Blue", 2: "Yellow", 3: "Green"}
 
@@ -152,7 +115,7 @@ class FourPlayerChessEnv(ta.Env):
         move_count = game_state["move_count"]
 
         # Get some example legal moves (for illustration)
-        example_moves = self._get_example_moves()
+        example_moves = self._get_example_moves(player_id)
 
         prompt = (
             f"You are playing 4-Player Chess as {player_color} (Player {player_id}).\n\n"
@@ -166,27 +129,38 @@ class FourPlayerChessEnv(ta.Env):
             "- Checkmate an opponent: +20 points\n"
             "- Stalemate opponents: +10 points × remaining players\n\n"
             "Move Format:\n"
-            "- Specify moves as (start_square, end_square) using algebraic notation\n"
-            "- Columns: a-n (left to right)\n"
-            "- Rows: 1-14 (bottom to top, where 10=a, 11=b, 12=c, 13=d, 14=e)\n"
-            f"- Example moves: {example_moves}\n"
-            "- Enclose your move in brackets: [(e2, e4)] or just (e2, e4)\n\n"
+            "- Specify moves using board coordinates: ((start_row, start_col), (end_row, end_col))\n"
+            "- Coordinates match the board display above (rows 0-13, columns 0-13)\n"
+            "- The board shows row numbers on the left (0-13) and column numbers on top (0-13)\n"
+            f"- Example moves for your pieces: {example_moves}\n"
+            "- Format: ((12, 4), (10, 4)) to move piece from row 12, col 4 to row 10, col 4\n"
+            "- You can also use: (12, 4, 10, 4) or [(12, 4, 10, 4)]\n\n"
             "Your move?"
         )
 
         return prompt
 
-    def _get_example_moves(self) -> str:
-        """Get some example legal moves for illustration."""
-        examples = ["(e2, e4)", "(d7, d5)", "(g1, f3)"]
-        return ", ".join(examples)
+    def _get_example_moves(self, player_id: int) -> str:
+        """Get example moves for the given player based on starting positions."""
+        # Red (0) pieces are at bottom (rows 12-13)
+        # Blue (1) pieces are at right (cols 12-13)
+        # Yellow (2) pieces are at top (rows 0-1)
+        # Green (3) pieces are at left (cols 0-1)
+
+        examples = {
+            0: "((12, 4), (10, 4)), ((12, 5), (11, 5))",  # Red: pawn forward
+            1: "((4, 12), (4, 10)), ((5, 12), (5, 11))",  # Blue: pawn forward
+            2: "((1, 4), (3, 4)), ((1, 5), (2, 5))",      # Yellow: pawn forward
+            3: "((4, 1), (4, 3)), ((5, 1), (5, 2))",      # Green: pawn forward
+        }
+        return examples.get(player_id, "((12, 4), (10, 4)), ((12, 5), (11, 5))")
 
     def step(self, action: str) -> Tuple[bool, Dict[str, Any]]:
         """
         Process a player's action.
 
         Args:
-            action: String containing the move, e.g., "(e2, e4)" or "[(a1, a3)]"
+            action: String containing the move, e.g., "((12, 3), (10, 3))" or "(12, 3, 10, 3)"
 
         Returns:
             Tuple of (done, info)
@@ -194,28 +168,26 @@ class FourPlayerChessEnv(ta.Env):
         # Parse action from string
         match = self.action_pattern.search(action)
         if not match:
-            return True, {"reason": f"Invalid move format. Use (start, end) like (e2, e4). Got: {action}"}
+            return True, {"reason": f"Invalid move format. Use ((start_row, start_col), (end_row, end_col)). Got: {action}"}
 
         try:
-            start_square = match.group(1).strip().lower()
-            end_square = match.group(2).strip().lower()
-
-            # Convert algebraic notation to coordinates
-            start_row, start_col = algebraic_to_coords(start_square)
-            end_row, end_col = algebraic_to_coords(end_square)
+            start_row = int(match.group(1))
+            start_col = int(match.group(2))
+            end_row = int(match.group(3))
+            end_col = int(match.group(4))
 
         except (ValueError, IndexError) as e:
-            return True, {"reason": f"Invalid square notation: {str(e)}"}
+            return True, {"reason": f"Invalid coordinate format: {str(e)}"}
 
-        # Validate squares are on the board
+        # Validate coordinates are on the board
         if not (0 <= start_row < 14 and 0 <= start_col < 14 and
                 0 <= end_row < 14 and 0 <= end_col < 14):
-            return True, {"reason": f"Squares out of bounds: ({start_square}, {end_square})"}
+            return True, {"reason": f"Coordinates out of bounds: (({start_row}, {start_col}), ({end_row}, {end_col}))"}
 
         # Check if squares are valid (not in corners)
         if self.valid_mask is not None:
             if self.valid_mask[start_row, start_col] == 0 or self.valid_mask[end_row, end_col] == 0:
-                return True, {"reason": f"Invalid square (corner): ({start_square}, {end_square})"}
+                return True, {"reason": f"Invalid square (corner): (({start_row}, {start_col}), ({end_row}, {end_col}))"}
 
         # Encode move as action number
         # For simplicity, assume no promotion (promotion_type=0)
@@ -250,7 +222,7 @@ class FourPlayerChessEnv(ta.Env):
 
             # Check if move was valid
             if not info.get('move_valid', False):
-                return True, {"reason": f"Illegal move: ({start_square}, {end_square})"}
+                return True, {"reason": f"Illegal move: (({start_row}, {start_col}), ({end_row}, {end_col}))"}
 
             # Update game state
             game_state["jax_state"] = jax_state
@@ -290,3 +262,4 @@ class FourPlayerChessEnv(ta.Env):
                 rewards[player_id] = 0.0
 
         return rewards
+

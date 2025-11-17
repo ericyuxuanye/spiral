@@ -114,16 +114,21 @@ def simple_negotiation_parse_available_actions(observation: str):
 
 def four_player_chess_parse_available_actions(observation: str):
     """
-    For 4-player chess, we use algebraic notation: (start_square, end_square).
+    For 4-player chess, we use numeric coordinates matching the board display.
+    Format: ((start_row, start_col), (end_row, end_col))
     Since generating all legal moves is expensive, we return common opening moves.
     The actual move validation will be done by the JAX environment.
     """
-    # Return some common chess opening moves in algebraic notation
+    # Return some common chess opening moves using numeric coordinates
     # These are just examples - the environment will validate legality
+    # Format: ((row, col), (row, col)) where coordinates match board display
     common_moves = [
-        "(e2, e4)", "(d2, d4)", "(g1, f3)", "(b1, c3)",
-        "(f2, f4)", "(c2, c4)", "(e2, e3)", "(d2, d3)",
-        "(g2, g3)", "(f1, g2)", "(e1, g1)", "(a2, a3)",
+        "((12, 4), (10, 4))",  # Pawn forward 2
+        "((12, 5), (11, 5))",  # Pawn forward 1
+        "((13, 4), (11, 5))",  # Knight move
+        "((12, 3), (10, 3))",  # Pawn forward 2
+        "((13, 5), (11, 4))",  # Knight move
+        "((12, 6), (11, 6))",  # Pawn forward 1
     ]
     return common_moves
 
