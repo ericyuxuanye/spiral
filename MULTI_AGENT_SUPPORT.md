@@ -69,7 +69,10 @@ A new environment `FourPlayerChess-v1` has been added as a reference implementat
 - Wraps the JAX-based 4-player chess environment from https://github.com/ericyuxuanye/4-player-chess-jax
 - Implements TextArena interface for compatibility
 - 4 players: Red (0), Blue (1), Yellow (2), Green (3)
-- Action space: integers from 0 to 102,400
+- **Action space**: Human-readable algebraic notation `(start, end)` where:
+  - Columns: a-n (14 columns, left to right)
+  - Rows: 1-14 (bottom to top, where 10=a, 11=b, 12=c, 13=d, 14=e)
+  - Example moves: `(e2, e4)`, `(d7, d5)`, `(g1, f3)`
 - Non-zero-sum rewards (captures, checkmates, stalemates)
 
 **Installation**:
