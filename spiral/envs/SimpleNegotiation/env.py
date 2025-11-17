@@ -62,9 +62,12 @@ class SimpleNegotiationEnv(ta.Env):
 
     def reset(self, num_players: int, seed: Optional[int] = None):
         """Reset the Negotiation Game to its initial state"""
+        if num_players != 2:
+            raise ValueError("SimpleNegotiation only supports exactly 2 players")
+
         # Initialize game state variables
         self.state = ta.State(
-            num_players=2, min_players=2, max_players=2, max_turns=self.max_turns
+            num_players=num_players, max_turns=self.max_turns
         )
 
         # Simplified starting resources - both players start with same quantities

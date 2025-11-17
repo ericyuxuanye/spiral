@@ -50,7 +50,7 @@ class FourPlayerChessEnv(ta.Env):
         if num_players != 4:
             raise ValueError("FourPlayerChess only supports exactly 4 players")
 
-        self.state = ta.State(num_players=4, min_players=4, max_players=4)
+        self.state = ta.State(num_players=4)
 
         # Initialize JAX environment
         rng = jax.random.PRNGKey(seed if seed is not None else 0)

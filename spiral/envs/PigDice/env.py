@@ -44,11 +44,12 @@ class PigDiceEnv(ta.Env):
         )
 
     def reset(self, num_players: int, seed: Optional[int] = None) -> None:
+        if num_players != 2:
+            raise ValueError("PigDice only supports exactly 2 players")
+
         # Create a new State
         self.state = ta.State(
             num_players=num_players,
-            min_players=2,
-            max_players=2,
             max_turns=self.max_turns,
             check_truncated=False,
         )

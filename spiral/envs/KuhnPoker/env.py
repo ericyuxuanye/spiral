@@ -68,10 +68,11 @@ class KuhnPokerEnv(ta.Env):
 
     def reset(self, num_players: int, seed: Optional[int] = None):
         """Reset the environment"""
+        if num_players != 2:
+            raise ValueError("KuhnPoker only supports exactly 2 players")
+
         self.state = ta.State(
             num_players=num_players,
-            min_players=2,
-            max_players=2,
             max_turns=self.max_rounds,
             check_truncated=False,
         )

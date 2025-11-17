@@ -93,11 +93,12 @@ class TruthAndDeceptionEnv(ta.Env):
 
     def reset(self, num_players: int, seed: Optional[int] = None):
         """Reset the game to its initial state."""
+        if num_players != 2:
+            raise ValueError("TruthAndDeception only supports exactly 2 players")
+
         # Initialize game state
         self.state = ta.State(
-            num_players=2,
-            min_players=2,
-            max_players=2,
+            num_players=num_players,
             max_turns=self.max_turns,
             check_truncated=False,
             role_mapping={0: "Deceiver", 1: "Guesser"},

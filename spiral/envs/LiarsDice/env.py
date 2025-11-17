@@ -30,7 +30,10 @@ class LiarsDiceEnv(ta.Env):
 
     def reset(self, num_players: int, seed: Optional[int] = None):
         """Reset the Liar's Dice game to its initial state"""
-        self.state = ta.State(num_players=num_players, min_players=2, max_players=15)
+        if num_players < 2 or num_players > 15:
+            raise ValueError("LiarsDice supports 2 to 15 players")
+
+        self.state = ta.State(num_players=num_players)
 
         remaining_dice = {
             pid: self.initial_num_dice for pid in range(self.state.num_players)
