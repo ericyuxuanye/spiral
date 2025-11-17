@@ -35,13 +35,15 @@ class EMA:
 class GameState:
     """Class to maintain game state and history."""
 
-    def __init__(self, max_context_length: int = 1024, max_turns: int = 50):
+    def __init__(self, max_context_length: int = 1024, max_turns: int = 50, num_players: int = 2):
         self.history = []  # Game interaction history
         self.long_history = []  # Game interaction history
         self.max_context_length = max_context_length
         self.max_turns = max_turns
         self.turn_count = 0
-        self.players_data = {0: [], 1: []}  # Store player-specific trajectory data
+        self.num_players = num_players
+        # Store player-specific trajectory data for N players
+        self.players_data = {i: [] for i in range(num_players)}
 
     def add_interaction(
         self, player_id: int, observation: str, action: str, thinking: str

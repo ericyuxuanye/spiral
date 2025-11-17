@@ -53,6 +53,12 @@ register(
     max_turns=50,
 )
 
+# Four Player Chess (four-player)
+register(
+    id="FourPlayerChess-v1",
+    entry_point="spiral.envs.FourPlayerChess.env:FourPlayerChessEnv",
+)
+
 
 def make_env(env_id: str, use_llm_obs_wrapper: bool):
     env = ta.make(env_id)

@@ -112,10 +112,24 @@ def simple_negotiation_parse_available_actions(observation: str):
     return valid_actions if valid_actions else ["I'll think about my options."]
 
 
+def four_player_chess_parse_available_actions(observation: str):
+    """
+    For 4-player chess, actions are integers from 0 to 102,400.
+    Since we can't enumerate all possible actions, we return a placeholder.
+    The actual action validation will be done by the JAX environment.
+    """
+    # The observation should contain action format info
+    # For now, return a message indicating the valid range
+    # In practice, the model will generate an action number
+    # and the environment will validate it
+    return [f"[{i}]" for i in range(100)]  # Return first 100 as examples
+
+
 _VALID_ACTION_PARSER = {
     "TicTacToe-v0": tic_tac_toe_parse_available_moves,
     "KuhnPoker-v1": kuhn_poker_parse_available_actions,
     "SimpleNegotiation-v1": simple_negotiation_parse_available_actions,
+    "FourPlayerChess-v1": four_player_chess_parse_available_actions,
 }
 
 

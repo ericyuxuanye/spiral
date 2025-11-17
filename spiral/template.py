@@ -18,7 +18,7 @@ from typing import Optional
 def apply_qwen3_template(observation: str, system_prompt: Optional[str] = None) -> str:
     del system_prompt
     return (
-        f"<|im_start|>user\nYou are playing a two-player zero-sum game. Make valid actions to win.\nObservation: {observation}"
+        f"<|im_start|>user\nYou are playing a competitive multi-player game. Make valid actions to win.\nObservation: {observation}"
         "\nPlease reason step by step, and put your final answer within \\boxed{}.<|im_end|>\n"
         "<|im_start|>assistant\n"
     )
@@ -39,7 +39,7 @@ def apply_r1_template(observation: str, system_prompt: Optional[str] = None) -> 
     """OctoThinker template for game-based tasks."""
     del system_prompt
     return (
-        f"A conversation between User and Assistant. The User presents the observation of a zero-sum game, and the Assistant makes a valid action in order to win. "
+        f"A conversation between User and Assistant. The User presents the observation of a competitive multi-player game, and the Assistant makes a valid action in order to win. "
         f"The Assistant first thinks about the reasoning process in the mind and then provides the action. "
         f"User: You must put your answer inside \\boxed{{}} "
         f"and your final answer will be extracted automatically by the \\boxed{{}} tag.\n"
@@ -61,10 +61,10 @@ def apply_r1_general_template(observation: str, system_prompt: Optional[str] = N
     )
 
 def apply_llama_instruct_template(observation: str, system_prompt: Optional[str] = None) -> str:
-    system_message = "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are playing a two-player zero-sum game. Make valid actions to win.<|eot_id|>"
+    system_message = "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are playing a competitive multi-player game. Make valid actions to win.<|eot_id|>"
     user_message = f"<|start_header_id|>user<|end_header_id|>\n\nCurrent Observation: {observation}\nPlease reason step by step, and put your final answer within \\boxed{{}}.<|eot_id|>\n"
     assistant_start = "<|start_header_id|>assistant<|end_header_id|>"
-    
+
     return system_message + user_message + assistant_start
 
 def apply_llama_instruct_general_template(observation: str, system_prompt: Optional[str] = None) -> str:

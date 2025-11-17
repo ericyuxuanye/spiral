@@ -67,6 +67,7 @@ class SelfPlayArgs(PPOArgs):
     use_llm_obs_wrappers: List[bool] = field(
         default_factory=lambda: [True]
     )  # Encode opponent history in the obs
+    num_players: int = 2  # Number of players in the game (2 for traditional games, 4+ for multi-agent)
 
     # Self-play specific settings
     num_envs: int = 1
@@ -165,7 +166,7 @@ class SelfPlayActor(PPOActor):
         )
 
         self.step_count = 0
-        self.online_model_player = actor_id % 2
+        self.online_model_player = actor_id % args.num_players
         if self.args.fixed_opponent not in ["", "random"]:
             self.open_router_opponent = ta.agents.OpenRouterAgent(
                 self.args.fixed_opponent
@@ -173,11 +174,11 @@ class SelfPlayActor(PPOActor):
         if self.args.use_role_baseline:
             self.role_baseline_ema = {}
             for env_id in self.args.env_ids:
+                # Create EMA for each player position
                 self.role_baseline_ema[env_id] = {
-                    0: EMA(self.args.role_baseline_ema_gamma),
-                    1: EMA(self.args.role_baseline_ema_gamma),
+                    i: EMA(self.args.role_baseline_ema_gamma) for i in range(args.num_players)
                 }
-            logging.info("Using role baseline for reward shaping")
+            logging.info(f"Using role baseline for reward shaping with {args.num_players} players")
 
         # Parse overrides once during initialization
         self._template_overrides = self._parse_template_overrides(
@@ -254,7 +255,7 @@ class SelfPlayActor(PPOActor):
         )
 
         for i, env in enumerate(vec_envs):
-            env.reset(num_players=2, seed=seed + i)
+            env.reset(num_players=self.args.num_players, seed=seed + i)
             env.state.error_allowance = 0
 
         # Initialize game state
@@ -262,6 +263,7 @@ class SelfPlayActor(PPOActor):
             GameState(
                 max_context_length=self.args.max_context_length,
                 max_turns=self.args.max_turns,
+                num_players=self.args.num_players,
             )
             for _ in range(self.args.num_envs)
         ]
@@ -284,13 +286,14 @@ class SelfPlayActor(PPOActor):
                     vec_observation.append(None)
 
             _mean_pid = np.mean([x for x in vec_player_id if x is not None])
-            assert _mean_pid == 0 or _mean_pid == 1, "vec_env player_id not consistent"
+            # Validate that all environments have the same current player
+            assert all(pid == vec_player_id[0] for pid in vec_player_id if pid is not None), "vec_env player_id not consistent"
             _curr_pid = vec_player_id[0]
 
             # --- [BEGIN] Fixed Opponent Logic Init ---
             agent_act = self.agent_act
             _fixed_opponent = ""
-            if self.args.fixed_opponent and _curr_pid == 1 - self.online_model_player:
+            if self.args.fixed_opponent and _curr_pid != self.online_model_player:
                 logging.info(
                     f"player{_curr_pid} using fixed opponent={self.args.fixed_opponent}"
                 )
@@ -345,7 +348,11 @@ class SelfPlayActor(PPOActor):
                         done = True
                     vec_done[i] = done
                     if done and action == INVALID_ACTION:
-                        rewards = {0: 0.5, 1: 0.5}
+                        # Invalid action: penalize the player who made the invalid move
+                        # Give equal positive reward to all other players
+                        num_other_players = self.args.num_players - 1
+                        reward_per_other = 0.5 if num_other_players > 0 else 0
+                        rewards = {i: reward_per_other for i in range(self.args.num_players)}
                         rewards[player_id] = -1.5
                         vec_rewards[i] = rewards
 
@@ -357,8 +364,8 @@ class SelfPlayActor(PPOActor):
                         logging.warning(
                             f"Game truncated after {game_state.turn_count} turns"
                         )
-                        # Set draw rewards
-                        rewards = {0: 0, 1: 0}
+                        # Set draw rewards (all players get 0)
+                        rewards = {i: 0 for i in range(self.args.num_players)}
                         vec_done[i] = True
                         vec_rewards[i] = rewards
 
@@ -520,7 +527,8 @@ class SelfPlayActor(PPOActor):
         """
         trajectory_data = []
 
-        player_ids_for_training = [0, 1]
+        # In self-play, train all players. With fixed opponent, only train the online model player
+        player_ids_for_training = list(range(self.args.num_players))
         if self.args.fixed_opponent:
             player_ids_for_training = [self.online_model_player]
         logging.info(f"player_ids_for_training: {player_ids_for_training}")
@@ -583,7 +591,7 @@ class SelfPlayActor(PPOActor):
                             "actor/response_is_truncated": step_data[
                                 "response_is_truncated"
                             ],
-                            "actor/draw": rewards[0] == rewards[1] == 0,
+                            "actor/draw": all(rewards[i] == 0 for i in range(self.args.num_players)),
                         },
                     )
                 )
@@ -718,21 +726,25 @@ class SelfPlayActor(PPOActor):
 
         assert self.eval_mode
 
-        opponent_id = 1 - player_id
-        agents = {
-            player_id: lambda obs: self.agent_act([obs], env_id)[0][0],
-            opponent_id: (
-                RandomAgent(env_id)
-                if opponent_name == "random"
-                else ta.agents.OpenRouterAgent(opponent_name)
-            ),
-        }
+        # Create agents for all players
+        agents = {}
+        for i in range(self.args.num_players):
+            if i == player_id:
+                # Online model
+                agents[i] = lambda obs: self.agent_act([obs], env_id)[0][0]
+            else:
+                # Opponent agents
+                agents[i] = (
+                    RandomAgent(env_id)
+                    if opponent_name == "random"
+                    else ta.agents.OpenRouterAgent(opponent_name)
+                )
 
         _use_llm_obs_wrapper = dict(
             zip(self.args.eval_env_ids, self.args.eval_use_llm_obs_wrappers)
         )[env_id]
         env = make_env(env_id, _use_llm_obs_wrapper)
-        env.reset(num_players=2, seed=int(time.time_ns()))
+        env.reset(num_players=self.args.num_players, seed=int(time.time_ns()))
         env.state.error_allowance = 0
 
         turn_counter = 0
@@ -746,34 +758,50 @@ class SelfPlayActor(PPOActor):
                 done = True
             turn_counter += 1
             if done and action == INVALID_ACTION:
-                invalid_rewards = {0: 1, 1: 1}
+                # Invalid action: penalize the player who made it
+                invalid_rewards = {i: 1 for i in range(self.args.num_players)}
                 invalid_rewards[pid] = -1
-                rewards = {0: 1, 1: 1}
+                rewards = {i: 1 for i in range(self.args.num_players)}
                 rewards[pid] = -1
         if "rewards" not in locals():
             rewards = env.close()
 
         if invalid_rewards:
-            invalid_move = (invalid_rewards[0] == 1 and invalid_rewards[1] == -1) or (
-                invalid_rewards[0] == -1 and invalid_rewards[1] == -1
-            )
+            invalid_move = invalid_rewards[player_id] == -1
         else:
             invalid_move = False
 
-        if rewards[player_id] > rewards[opponent_id]:
-            outcome = "win"
-        elif rewards[player_id] < rewards[opponent_id]:
-            outcome = "loss"
+        # For multi-player games, determine outcome based on model's rank
+        # Sort players by reward (descending)
+        sorted_players = sorted(range(self.args.num_players), key=lambda i: rewards[i], reverse=True)
+        model_rank = sorted_players.index(player_id) + 1  # 1-indexed rank
+
+        # Determine outcome based on rank
+        if model_rank == 1:
+            # Check if there's a tie for first place
+            first_place_reward = rewards[sorted_players[0]]
+            num_tied_for_first = sum(1 for i in range(self.args.num_players) if rewards[i] == first_place_reward)
+            outcome = "draw" if num_tied_for_first > 1 else "win"
         else:
-            outcome = "draw"
+            # Check if model is tied with last place
+            last_place_reward = rewards[sorted_players[-1]]
+            if rewards[player_id] == last_place_reward:
+                outcome = "loss"
+            else:
+                outcome = "draw"  # Middle rank or tied
+
+        # Calculate average opponent reward
+        opponent_rewards = [rewards[i] for i in range(self.args.num_players) if i != player_id]
+        avg_opponent_reward = np.mean(opponent_rewards) if opponent_rewards else 0
 
         metrics = {
             "outcome": outcome,
             "invalid_move": invalid_move,
             "reason": info.get("reason", ""),
             "num_turns": turn_counter,
-            "opponent_reward": rewards[opponent_id],
+            "opponent_reward": avg_opponent_reward,
             "model_reward": rewards[player_id],
+            "model_rank": model_rank,
             "env_id": env_id,
             "opponent_name": opponent_name,
             "model_pid": player_id,
