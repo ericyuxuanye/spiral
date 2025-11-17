@@ -114,15 +114,18 @@ def simple_negotiation_parse_available_actions(observation: str):
 
 def four_player_chess_parse_available_actions(observation: str):
     """
-    For 4-player chess, actions are integers from 0 to 102,400.
-    Since we can't enumerate all possible actions, we return a placeholder.
-    The actual action validation will be done by the JAX environment.
+    For 4-player chess, we use algebraic notation: (start_square, end_square).
+    Since generating all legal moves is expensive, we return common opening moves.
+    The actual move validation will be done by the JAX environment.
     """
-    # The observation should contain action format info
-    # For now, return a message indicating the valid range
-    # In practice, the model will generate an action number
-    # and the environment will validate it
-    return [f"[{i}]" for i in range(100)]  # Return first 100 as examples
+    # Return some common chess opening moves in algebraic notation
+    # These are just examples - the environment will validate legality
+    common_moves = [
+        "(e2, e4)", "(d2, d4)", "(g1, f3)", "(b1, c3)",
+        "(f2, f4)", "(c2, c4)", "(e2, e3)", "(d2, d3)",
+        "(g2, g3)", "(f1, g2)", "(e1, g1)", "(a2, a3)",
+    ]
+    return common_moves
 
 
 _VALID_ACTION_PARSER = {

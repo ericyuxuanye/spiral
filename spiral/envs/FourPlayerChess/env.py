@@ -26,10 +26,52 @@ except ImportError:
     JAX_AVAILABLE = False
 
 
+# Algebraic notation mapping for the 14x14 cross-shaped board
+# Columns: a-n (14 columns)
+# Rows: 1-14 (14 rows, 1 at bottom, 14 at top)
+COLS = 'abcdefghijklmn'
+ROWS = '123456789' + 'abcde'  # 1-9, then a-e for rows 10-14
+
+
+def coords_to_algebraic(row: int, col: int) -> str:
+    """Convert (row, col) coordinates to algebraic notation like 'a1', 'h8'."""
+    # Row 0 in array = row 14 in algebraic (top)
+    # Row 13 in array = row 1 in algebraic (bottom)
+    algebraic_row = 14 - row
+    if algebraic_row <= 9:
+        row_str = str(algebraic_row)
+    else:
+        # 10='a', 11='b', 12='c', 13='d', 14='e'
+        row_str = chr(ord('a') + algebraic_row - 10)
+
+    return COLS[col] + row_str
+
+
+def algebraic_to_coords(algebraic: str) -> Tuple[int, int]:
+    """Convert algebraic notation like 'a1', 'h8' to (row, col) coordinates."""
+    col_char = algebraic[0].lower()
+    row_part = algebraic[1:]
+
+    col = COLS.index(col_char)
+
+    # Parse row number
+    if row_part.isdigit():
+        algebraic_row = int(row_part)
+    else:
+        # a=10, b=11, c=12, d=13, e=14
+        algebraic_row = ord(row_part.lower()) - ord('a') + 10
+
+    # Convert to array coordinates (row 0 = algebraic row 14)
+    row = 14 - algebraic_row
+
+    return row, col
+
+
 class FourPlayerChessEnv(ta.Env):
     """
     TextArena wrapper for 4-player chess JAX environment.
-    Adapts the JAX-based 4-player chess to TextArena interface.
+    Uses human-readable move notation: (start, end) where start and end are algebraic squares.
+    Example: (e2, e4) to move from e2 to e4
     """
 
     def __init__(self):
@@ -41,9 +83,34 @@ class FourPlayerChessEnv(ta.Env):
             )
 
         self.jax_env = JAXChessEnv()
-        self.action_pattern = re.compile(r"\[(\d+)\]", re.IGNORECASE)
+        # Match tuples like (a1, b3) or (e2, e4)
+        self.action_pattern = re.compile(r'\[?\(?([a-n][1-9a-e]),\s*([a-n][1-9a-e])\)?\]?', re.IGNORECASE)
         self.player_names = ["Red", "Blue", "Yellow", "Green"]
         self.player_colors = {0: "Red", 1: "Blue", 2: "Yellow", 3: "Green"}
+
+        # Create valid square mask for the cross-shaped board
+        self.valid_mask = self._create_valid_mask()
+
+    def _create_valid_mask(self):
+        """Create valid square mask matching the JAX environment."""
+        try:
+            import jax.numpy as jnp
+            mask = jnp.zeros((14, 14), dtype=jnp.int32)
+
+            # Central 8x8 area
+            mask = mask.at[3:11, 3:11].set(1)
+            # Red extension (bottom)
+            mask = mask.at[11:14, 3:11].set(1)
+            # Blue extension (right)
+            mask = mask.at[3:11, 11:14].set(1)
+            # Yellow extension (top)
+            mask = mask.at[0:3, 3:11].set(1)
+            # Green extension (left)
+            mask = mask.at[3:11, 0:3].set(1)
+
+            return mask
+        except:
+            return None
 
     def reset(self, num_players: int = 4, seed: Optional[int] = None):
         """Reset the 4-player chess game to its initial state."""
@@ -61,7 +128,7 @@ class FourPlayerChessEnv(ta.Env):
             "jax_obs": obs,
             "rng": rng,
             "move_count": 0,
-            "active_players": [0, 1, 2, 3],  # Track which players are still active
+            "active_players": [0, 1, 2, 3],
         }
 
         self.state.reset(
@@ -84,6 +151,9 @@ class FourPlayerChessEnv(ta.Env):
         # Get game status
         move_count = game_state["move_count"]
 
+        # Get some example legal moves (for illustration)
+        example_moves = self._get_example_moves()
+
         prompt = (
             f"You are playing 4-Player Chess as {player_color} (Player {player_id}).\n\n"
             f"Board State:\n{board_str}\n\n"
@@ -91,24 +161,32 @@ class FourPlayerChessEnv(ta.Env):
             f"Current player: {self.player_colors[current_player]} (Player {current_player})\n\n"
             "Game Rules:\n"
             "- 4 players take turns clockwise: Red (0) -> Blue (1) -> Yellow (2) -> Green (3)\n"
-            "- Capture opponent pieces to earn points\n"
-            "- Checkmate an opponent to earn 20 points\n"
-            "- Stalemate opponents to earn 10 points × remaining players\n\n"
-            "Action Format:\n"
-            "- Actions are encoded as integers from 0 to 102,400\n"
-            "- Respond with your action in the format: [action_number]\n"
-            "- Example: [12345] to play action 12345\n\n"
-            "Your action?"
+            "- Standard chess rules apply with adaptations for 4 players\n"
+            "- Capture opponent pieces to earn points (+1 pawn, +3 knight/bishop, +5 rook, +9 queen)\n"
+            "- Checkmate an opponent: +20 points\n"
+            "- Stalemate opponents: +10 points × remaining players\n\n"
+            "Move Format:\n"
+            "- Specify moves as (start_square, end_square) using algebraic notation\n"
+            "- Columns: a-n (left to right)\n"
+            "- Rows: 1-14 (bottom to top, where 10=a, 11=b, 12=c, 13=d, 14=e)\n"
+            f"- Example moves: {example_moves}\n"
+            "- Enclose your move in brackets: [(e2, e4)] or just (e2, e4)\n\n"
+            "Your move?"
         )
 
         return prompt
+
+    def _get_example_moves(self) -> str:
+        """Get some example legal moves for illustration."""
+        examples = ["(e2, e4)", "(d7, d5)", "(g1, f3)"]
+        return ", ".join(examples)
 
     def step(self, action: str) -> Tuple[bool, Dict[str, Any]]:
         """
         Process a player's action.
 
         Args:
-            action: String containing the action (e.g., "[12345]")
+            action: String containing the move, e.g., "(e2, e4)" or "[(a1, a3)]"
 
         Returns:
             Tuple of (done, info)
@@ -116,16 +194,50 @@ class FourPlayerChessEnv(ta.Env):
         # Parse action from string
         match = self.action_pattern.search(action)
         if not match:
-            return True, {"reason": "Invalid action format. Use [action_number]"}
+            return True, {"reason": f"Invalid move format. Use (start, end) like (e2, e4). Got: {action}"}
 
         try:
-            action_int = int(match.group(1))
-        except ValueError:
-            return True, {"reason": "Invalid action number"}
+            start_square = match.group(1).strip().lower()
+            end_square = match.group(2).strip().lower()
 
-        # Validate action range
-        if action_int < 0 or action_int > 102400:
-            return True, {"reason": f"Action {action_int} out of valid range [0, 102400]"}
+            # Convert algebraic notation to coordinates
+            start_row, start_col = algebraic_to_coords(start_square)
+            end_row, end_col = algebraic_to_coords(end_square)
+
+        except (ValueError, IndexError) as e:
+            return True, {"reason": f"Invalid square notation: {str(e)}"}
+
+        # Validate squares are on the board
+        if not (0 <= start_row < 14 and 0 <= start_col < 14 and
+                0 <= end_row < 14 and 0 <= end_col < 14):
+            return True, {"reason": f"Squares out of bounds: ({start_square}, {end_square})"}
+
+        # Check if squares are valid (not in corners)
+        if self.valid_mask is not None:
+            if self.valid_mask[start_row, start_col] == 0 or self.valid_mask[end_row, end_col] == 0:
+                return True, {"reason": f"Invalid square (corner): ({start_square}, {end_square})"}
+
+        # Encode move as action number
+        # For simplicity, assume no promotion (promotion_type=0)
+        # In a full implementation, you'd parse promotion from the move string
+        promotion_type = 0
+
+        try:
+            # Use the JAX environment's encode_action function
+            from four_player_chess_jax.four_player_chess.utils import encode_action
+
+            action_int = encode_action(
+                jnp.int32(start_row),
+                jnp.int32(start_col),
+                jnp.int32(end_row),
+                jnp.int32(end_col),
+                jnp.int32(promotion_type),
+                self.valid_mask
+            )
+            action_int = int(action_int)
+
+        except Exception as e:
+            return True, {"reason": f"Error encoding move: {str(e)}"}
 
         # Execute action in JAX environment
         game_state = self.state.game_state
@@ -135,6 +247,10 @@ class FourPlayerChessEnv(ta.Env):
             jax_state, obs, reward, done, info = self.jax_env.step(
                 step_rng, game_state["jax_state"], action_int
             )
+
+            # Check if move was valid
+            if not info.get('move_valid', False):
+                return True, {"reason": f"Illegal move: ({start_square}, {end_square})"}
 
             # Update game state
             game_state["jax_state"] = jax_state
@@ -152,7 +268,7 @@ class FourPlayerChessEnv(ta.Env):
             return False, info
 
         except Exception as e:
-            return True, {"reason": f"Error executing action: {str(e)}"}
+            return True, {"reason": f"Error executing move: {str(e)}"}
 
     def close(self) -> Dict[int, float]:
         """
@@ -163,17 +279,14 @@ class FourPlayerChessEnv(ta.Env):
         """
         jax_state = self.state.game_state["jax_state"]
 
-        # Extract rewards from JAX state
-        # The JAX environment should have rewards stored in the state
+        # Extract scores from JAX state
         rewards = {}
         for player_id in range(4):
-            # Convert JAX array to float
-            if hasattr(jax_state, 'rewards'):
-                rewards[player_id] = float(jax_state.rewards[player_id])
-            elif hasattr(jax_state, 'scores'):
-                rewards[player_id] = float(jax_state.scores[player_id])
+            # The JAX environment stores scores in player_scores
+            if hasattr(jax_state, 'player_scores'):
+                rewards[player_id] = float(jax_state.player_scores[player_id])
             else:
-                # Fallback: use equal rewards
+                # Fallback
                 rewards[player_id] = 0.0
 
         return rewards
