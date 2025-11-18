@@ -136,17 +136,31 @@ class SelfPlayActor(PPOActor):
         return overrides
 
     def init(self, actor_id, save_path):
+        logging.info(
+            f"[Actor-{actor_id}] ===== INITIALIZING ACTOR ====="
+        )
         super().init(actor_id, save_path)
+        logging.info(
+            f"[Actor-{actor_id}] Parent init complete"
+        )
         self.game_state_save_path = os.path.join(self.save_path, "game_state")
         if actor_id == 0:
             os.makedirs(self.game_state_save_path, exist_ok=True)
         self.args: SelfPlayArgs = self.args
         args = self.args
+        logging.info(
+            f"[Actor-{actor_id}] Initializing with num_players={args.num_players}, "
+            f"online_model_player={actor_id % args.num_players}"
+        )
         self.oracle = MATHOracle(
             args.eval_prompt_template, "fast", correct_reward=1, incorrect_reward=0
         )
 
         # Set up sampling parameters (copied from PPOActor)
+        logging.info(
+            f"[Actor-{actor_id}] Setting up sampling params: temp={args.temperature}, "
+            f"top_p={args.top_p}, max_tokens={args.generate_max_length}"
+        )
         self.sampling_params = vllm.SamplingParams(
             temperature=args.temperature,
             top_p=args.top_p,
@@ -167,6 +181,9 @@ class SelfPlayActor(PPOActor):
 
         self.step_count = 0
         self.online_model_player = actor_id % args.num_players
+        logging.info(
+            f"[Actor-{actor_id}] Will play as player {self.online_model_player}"
+        )
         if self.args.fixed_opponent not in ["", "random"]:
             self.open_router_opponent = ta.agents.OpenRouterAgent(
                 self.args.fixed_opponent
@@ -198,7 +215,13 @@ class SelfPlayActor(PPOActor):
         del formatted_prompts, references
 
         logging.info(
-            f"Actor-{self.actor_id} starting to collect game trajectories at step {self.step_count}"
+            f"[Actor-{self.actor_id}] ===== STARTING STEP {self.step_count} ====="
+        )
+        logging.info(
+            f"[Actor-{self.actor_id}] Need to collect {len(prompts)} trajectories"
+        )
+        logging.info(
+            f"[Actor-{self.actor_id}] Training environments: {self.args.env_ids}"
         )
         info = {}
 
@@ -210,13 +233,28 @@ class SelfPlayActor(PPOActor):
             # Shuffle environments to mitigate order bias
             env_ids = copy.deepcopy(self.args.env_ids)
             random.shuffle(env_ids)
+            logging.info(
+                f"[Actor-{self.actor_id}] Playing game batch {i}, environments: {env_ids}, "
+                f"trajectories collected so far: {len(all_trajectories)}/{len(prompts)}"
+            )
             for env_id in env_ids:
+                logging.info(
+                    f"[Actor-{self.actor_id}] Starting game on {env_id}"
+                )
                 game_trajectories = self.play_game_vectorized(
                     env_id=env_id, seed=int(time.time_ns())
+                )
+                logging.info(
+                    f"[Actor-{self.actor_id}] Finished game on {env_id}, "
+                    f"collected {len(game_trajectories)} trajectories from this game"
                 )
                 all_trajectories.extend(game_trajectories)
 
             if len(all_trajectories) >= len(prompts):
+                logging.info(
+                    f"[Actor-{self.actor_id}] Collected enough trajectories "
+                    f"({len(all_trajectories)}/{len(prompts)}), subsampling..."
+                )
                 subsample_indices = np.random.choice(
                     len(all_trajectories),
                     len(prompts),
@@ -235,11 +273,23 @@ class SelfPlayActor(PPOActor):
         info["actor/max_reward"] = np.max(rewards)
         info["actor/min_reward"] = np.min(rewards)
 
-        logging.info(f"Actor finished collecting {len(all_trajectories)} trajectories")
+        logging.info(
+            f"[Actor-{self.actor_id}] ===== FINISHED STEP {self.step_count} ====="
+        )
+        logging.info(
+            f"[Actor-{self.actor_id}] Collected {len(all_trajectories)} trajectories "
+            f"in {info['actor/game_time']:.2f}s, mean_reward={info['actor/mean_reward']:.3f}"
+        )
 
         self.step_count += 1
         # Serialize and return the trajectories
+        logging.info(
+            f"[Actor-{self.actor_id}] Serializing trajectories..."
+        )
         handle = self.ipc_client.serialize_ipc(all_trajectories)
+        logging.info(
+            f"[Actor-{self.actor_id}] Trajectories serialized, returning to learner"
+        )
         return handle
 
     def play_game_vectorized(
@@ -247,6 +297,10 @@ class SelfPlayActor(PPOActor):
         env_id: str,
         seed: Optional[int] = None,
     ) -> List[TransitionData]:
+        logging.info(
+            f"[Actor-{self.actor_id}] play_game_vectorized: Creating {self.args.num_envs} "
+            f"{env_id} environment(s) with {self.args.num_players} players"
+        )
         # Create and initialize vectorized environments
         vec_envs = make_vec_env(
             env_id,
@@ -254,6 +308,9 @@ class SelfPlayActor(PPOActor):
             use_llm_obs_wrapper=self.args.env_to_llm_obs_wrapper[env_id],
         )
 
+        logging.info(
+            f"[Actor-{self.actor_id}] Resetting environments..."
+        )
         for i, env in enumerate(vec_envs):
             env.reset(num_players=self.args.num_players, seed=seed + i)
             env.state.error_allowance = 0
@@ -270,8 +327,18 @@ class SelfPlayActor(PPOActor):
         vec_done = [False] * self.args.num_envs
         vec_rewards = [None] * self.args.num_envs
 
+        logging.info(
+            f"[Actor-{self.actor_id}] Starting main game loop..."
+        )
+        turn_count = 0
         # Main game loop
         while not all(vec_done):
+            turn_count += 1
+            if turn_count % 10 == 0:
+                logging.info(
+                    f"[Actor-{self.actor_id}] Game turn {turn_count}, "
+                    f"done: {sum(vec_done)}/{len(vec_done)}"
+                )
             # Get current player and observation
             vec_player_id = []
             vec_observation = []
@@ -303,7 +370,15 @@ class SelfPlayActor(PPOActor):
                 )
             # --- [END] Fixed Opponent Logic Init ---
 
+            if turn_count == 1:
+                logging.info(
+                    f"[Actor-{self.actor_id}] Turn {turn_count}: Calling agent_act for player {_curr_pid}"
+                )
             vec_action, vec_extras = agent_act(vec_observation, env_id=env_id)
+            if turn_count == 1:
+                logging.info(
+                    f"[Actor-{self.actor_id}] Turn {turn_count}: agent_act returned actions"
+                )
 
             for i in range(self.args.num_envs):
                 if not vec_done[i]:
@@ -405,10 +480,21 @@ class SelfPlayActor(PPOActor):
                 indent=4,
             )
 
+        logging.info(
+            f"[Actor-{self.actor_id}] Game loop completed after {turn_count} turns. Preparing trajectories..."
+        )
         trajectories = []
-        for game_state, rewards in zip(vec_game_states, vec_rewards):
-            trajectories.extend(self.prepare_trajectories(game_state, rewards, env_id))
+        for game_idx, (game_state, rewards) in enumerate(zip(vec_game_states, vec_rewards)):
+            game_trajs = self.prepare_trajectories(game_state, rewards, env_id)
+            logging.debug(
+                f"[Actor-{self.actor_id}] Game {game_idx}: prepared {len(game_trajs)} trajectories, "
+                f"rewards={rewards}"
+            )
+            trajectories.extend(game_trajs)
 
+        logging.info(
+            f"[Actor-{self.actor_id}] Finished preparing all trajectories: {len(trajectories)} total"
+        )
         return trajectories
 
     def fixed_opponent_act(
@@ -450,9 +536,12 @@ class SelfPlayActor(PPOActor):
             Tuple[str, dict]: Action and extra data.
 
         """
+        logging.debug(
+            f"[Actor-{self.actor_id}] agent_act: Processing {len(vec_observation)} observations for {env_id}"
+        )
         clean_actions = []
         extras = []
-        for observation in vec_observation:
+        for idx, observation in enumerate(vec_observation):
             if observation is None:
                 clean_actions.append(None)
                 extras.append(None)
@@ -463,13 +552,22 @@ class SelfPlayActor(PPOActor):
                 env_id, self.args.prompt_template
             )
 
+            logging.debug(
+                f"[Actor-{self.actor_id}] agent_act: Formatting observation {idx} with template {template_name}"
+            )
             formatted_observation = TEMPLATE_FACTORY[template_name](
                 observation, system_prompt=None
             )
             sampling_params = (
                 self.eval_sampling_params if self.eval_mode else self.sampling_params
             )
+            logging.info(
+                f"[Actor-{self.actor_id}] agent_act: Calling LLM generate for observation {idx}..."
+            )
             outputs = self.generate([formatted_observation], sampling_params)
+            logging.info(
+                f"[Actor-{self.actor_id}] agent_act: LLM generate completed for observation {idx}"
+            )
             raw_action = outputs[0].outputs[0].text
             prompt_token_ids = outputs[0].prompt_token_ids
             token_ids = outputs[0].outputs[0].token_ids
@@ -525,13 +623,18 @@ class SelfPlayActor(PPOActor):
         Returns:
             List of trajectory data
         """
+        logging.debug(
+            f"[Actor-{self.actor_id}] prepare_trajectories: Starting with rewards={rewards}"
+        )
         trajectory_data = []
 
         # In self-play, train all players. With fixed opponent, only train the online model player
         player_ids_for_training = list(range(self.args.num_players))
         if self.args.fixed_opponent:
             player_ids_for_training = [self.online_model_player]
-        logging.info(f"player_ids_for_training: {player_ids_for_training}")
+        logging.debug(
+            f"[Actor-{self.actor_id}] prepare_trajectories: player_ids_for_training={player_ids_for_training}"
+        )
 
         for player_id in player_ids_for_training:
             player_trajectories = game_state.get_player_trajectories(player_id)
@@ -891,8 +994,21 @@ class SelfPlayLearner(PPOLearner):
     def process_feedback_data(self, data_list: List[TransitionData]):
         """Process collected feedback data, adding it to buffer."""
 
-        logging.info("adding data into buffer")
+        logging.info(
+            f"[Learner] process_feedback_data: Received {len(data_list)} trajectories from actors"
+        )
 
+        # Log some statistics about the received data
+        if data_list:
+            rewards = [max(t.rewards) if len(t.rewards) > 0 else 0.0 for t in data_list]
+            logging.info(
+                f"[Learner] process_feedback_data: Reward stats - "
+                f"mean={np.mean(rewards):.3f}, min={np.min(rewards):.3f}, max={np.max(rewards):.3f}"
+            )
+
+        logging.info(
+            f"[Learner] process_feedback_data: Adding {len(data_list)} trajectories to buffer"
+        )
         # Add to buffer
         self.pi_buffer.extend(data_list)
 
@@ -902,6 +1018,10 @@ class SelfPlayLearner(PPOLearner):
 
         # Update query step (for tracking progress)
         self.query_step += len(data_list)
+        logging.info(
+            f"[Learner] process_feedback_data: Buffer now has {len(self.pi_buffer)} trajectories, "
+            f"query_step={self.query_step}"
+        )
 
     def compute_monte_carlo_advantages(self, rewards, response_masks):
         del response_masks

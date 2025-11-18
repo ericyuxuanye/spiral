@@ -120,21 +120,26 @@ class SelfPlayCollector(FeedbackCollector):
         rank = torch.distributed.get_rank()
         actor = self.actors[(rank // self.args.num_gpus_per_actor) % len(self.actors)]
         logging.info(
-            f"Learner {rank} local actor rank: {(rank // self.args.num_gpus_per_actor) % len(self.actors)}"
+            f"[Collector] Learner rank {rank}, using local actor rank: "
+            f"{(rank // self.args.num_gpus_per_actor) % len(self.actors)}"
         )
 
         if torch.distributed.get_rank(same_actor_group) == 0:
+            num_trajectories_needed = (
+                self.args.rollout_batch_size_per_device * self.args.num_gpus_per_actor
+            )
+            logging.info(
+                f"[Collector] Group leader (rank {rank}): Requesting {num_trajectories_needed} "
+                f"trajectories from actor..."
+            )
             # Get trajectories from the actor
-            handle = actor.step(
-                ["dummy"]
-                * (
-                    self.args.rollout_batch_size_per_device
-                    * self.args.num_gpus_per_actor
-                )
-            )  # No arguments needed as environment provides prompts
+            handle = actor.step(["dummy"] * num_trajectories_needed)
+            logging.info(
+                f"[Collector] Group leader (rank {rank}): Actor.step() returned, deserializing..."
+            )
             feedback_data = self.ipc_client.deserialize_ipc(handle)
             logging.info(
-                f"Group Leader Learner {rank} feedback_data size: {len(feedback_data)}"
+                f"[Collector] Group leader (rank {rank}): Deserialized {len(feedback_data)} trajectories"
             )
             rank_lengths = [
                 self.args.rollout_batch_size_per_device
